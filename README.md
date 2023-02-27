@@ -39,8 +39,8 @@ CALENDAR_TIMEZONE=America/Detroit
 
 A large number of files can be provided, but most cases are probably ok with using 3 separate calendars. Copy all calendars used into the `calendars` folder. The calendars need to be in the `ical` format.
 
-+ **Main Calendar:** Source for daily events. Should be updated by the cron job
-+ **Holiday Calendar:** Source for holidays and other important days
++ **Main Calendar:** Source for daily events. Should be updated by the cron job (*Calendar.ics*)
++ **Holiday Calendar:** Source for holidays and other important days (*holidays.ics*)
 + **Birthday Calendar:** Source for birthdays (file name needs to end on *birthdays.ics* to be detected as birthdays)
 
 ## Start the Application
