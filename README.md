@@ -68,6 +68,13 @@ pm2 start ./bin/www
 pm2 start cron.js
 ```
 
+To save the running processes and let pm2 start them after reboot automaically, just save them:
+```zsh
+pm2 save
+pm2 startup
+```
+
+
 The local server will be available at `http://localhost:3000`, unless set up for a different port.
 
 ## REST API
