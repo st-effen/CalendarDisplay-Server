@@ -11,6 +11,23 @@ dayjs.extend(timezone);
 dayjs.extend(isSameOrBefore);
 dayjs.extend(isBetween);
 
+const DEFAULT_FALLBACK_ZONE = process.env.CALENDAR_TIMEZONE || 'UTC';
+
+function parseDateWithZone(val, fallbackZone) {
+  const zone = (val && val.tz) || fallbackZone || DEFAULT_FALLBACK_ZONE;
+  try {
+    if (zone) {
+      // If val is a Date or an ISO string, tz() will interpret it in the given zone
+      return dayjs.tz(val, zone);
+    } else {
+      // Fallback to normal parsing (keeps offsets if present)
+      return dayjs(val);
+    }
+  } catch (e) {
+    return dayjs(val);
+  }
+}
+
 const icalToJSON = function (data) {
   var rangeStart = dayjs().startOf('day').toDate();
   var rangeEnd = dayjs().endOf('day').add(2, 'week').toDate();
@@ -22,14 +39,17 @@ const icalToJSON = function (data) {
       var ev = data[k];
       if (ev.type == 'VEVENT') {
 
+        // determine event zone (use start.tz if present, else fallback)
+        const eventZone = (ev.start && ev.start.tz) || DEFAULT_FALLBACK_ZONE;
+
         // Event Object
         var event = {
           type: 'VEVENT',
           uid: ev.uid,
-          start: dayjs(ev.start).unix(),
-          end: dayjs(ev.end).unix() || null,
+          start: ev.start ? parseDateWithZone(ev.start, eventZone).unix() : null,
+          end: ev.end ? parseDateWithZone(ev.end, eventZone).unix() : null,
           allday: false,
-          tzid: ev.start.tz || null,
+          tzid: (ev.start && ev.start.tz) ? ev.start.tz : (process.env.CALENDAR_TIMEZONE || null),
           categories: (ev.categories !== undefined) ? ev.categories.join(",") : null || null
         };
 
@@ -50,6 +70,11 @@ const icalToJSON = function (data) {
         if (ev.start && !ev.end || ev.start && ev.end && dayjs(ev.end).diff(ev.start, 'hour') >= 24)
           event.allday = true;
 
+        // set gmtoffset for the event (based on parsed start)
+        if (ev.start) {
+          event.gmtoffset = parseDateWithZone(ev.start, eventZone).utcOffset();
+        }
+
         // Check if there is an event with an alarm
         var keys = Object.keys(ev);
         for (var a in keys) {
@@ -64,7 +89,6 @@ const icalToJSON = function (data) {
         }
         else if (ev.rrule) {
           // For recurring events, get the set of event start dates that fall within the range
-          // of dates we're looking for.
           var dates = ev.rrule.between(
             rangeStart,
             rangeEnd,
@@ -74,76 +98,63 @@ const icalToJSON = function (data) {
             }
           );
 
-          // The "dates" array contains the set of dates within our desired date range range that are valid
-          // for the recurrence rule.  *However*, it's possible for us to have a specific recurrence that
-          // had its date changed from outside the range to inside the range.  One way to handle this is
-          // to add *all* recurrence override entries into the set of dates that we check, and then later
-          // filter out any recurrences that don't actually belong within our range.
+          // Add recurrence overrides if any
           if (ev.recurrences !== undefined) {
             for (var r in ev.recurrences) {
-              // Only add dates that weren't already in the range we added from the rrule so that 
-              // we don't double-add those events.
               if (dayjs(new Date(r)).isBetween(rangeStart, rangeEnd) != true) {
                 dates.push(new Date(r));
               }
             }
           }
 
-          // Loop through the set of date entries to see which recurrences should be printed.
+          // Loop through recurrence dates
           for (i in dates) {
             var date = dates[i];
             var curEvent = ev;
             var showRecurrence = true;
 
-            // Calculate the events duration
+            // Calculate the events duration (in seconds)
             var curDuration = parseInt(dayjs(curEvent.end).unix()) - parseInt(dayjs(curEvent.start).unix());
 
-            startDate = dayjs(date);
+            // startDate is the recurrence date (day/month/year), we'll combine with the time of the original event in the same zone
+            var startDate = dayjs(date);
 
-            // Use just the date of the recurrence to look up overrides and exceptions (i.e. chop off time information)
+            // Lookup key for recurrences/exceptions
             var dateLookupKey = date.toISOString().substring(0, 10);
 
-            // For each date that we're checking, it's possible that there is a recurrence override for that one day.
             if ((curEvent.recurrences !== undefined) && (curEvent.recurrences[dateLookupKey] !== undefined)) {
-              // We found an override, so for this recurrence, use a potentially different title, start date, and duration.
               curEvent = curEvent.recurrences[dateLookupKey];
-              startDate = dayjs(curEvent.start);
-              curDuration = parseInt(dayjs(curEvent.end).unix()) - parseInt(startDate.unix());
-            }
-            // If there's no recurrence override, check for an exception date.  Exception dates represent exceptions to the rule.
-            else if ((curEvent.exdate !== undefined) && (curEvent.exdate[dateLookupKey] !== undefined)) {
-              // This date is an exception date, which means we should skip it in the recurrence pattern.
+            } else if ((curEvent.exdate !== undefined) && (curEvent.exdate[dateLookupKey] !== undefined)) {
               showRecurrence = false;
             }
 
-            // Set the the title and the end date from either the regular event or the recurrence override.
-            // var recurrenceTitle = curEvent.summary;
-            if (curEvent.summary && typeof (curEvent.summary) == 'object')
-              event.summary = curEvent.summary.val.replace(/\n/g, ' ');
-            else if (curEvent.summary)
-              event.summary = curEvent.summary.replace(/\n/g, ' ');
-            else
-              event.summary = null;
+            // Build startDate/time in the correct zone instead of string concatenation
+            const zone = (curEvent.start && curEvent.start.tz) || DEFAULT_FALLBACK_ZONE;
+            const timeOfDay = curEvent.start ? parseDateWithZone(curEvent.start, zone) : null;
 
-            endDate = dayjs(startDate).add(curDuration, 'second');
+            if (!timeOfDay) {
+              // if we don't have a base start time, skip
+              continue;
+            }
 
-            // If this recurrence ends before the start of the date range, or starts after the end of the date range, 
-            // don't process it.
-            if (endDate.isBefore(rangeStart) || startDate.isAfter(rangeEnd)) {
+            // Build a new start using the recurrence date and the original event's time in the same zone
+            var newStart = dayjs.tz(date, zone)
+              .hour(timeOfDay.hour())
+              .minute(timeOfDay.minute())
+              .second(timeOfDay.second());
+
+            var newEnd = newStart.add(curDuration, 'second');
+
+            // If this recurrence ends before the start of the date range, or starts after the end of the date range, skip
+            if (newEnd.isBefore(rangeStart) || newStart.isAfter(rangeEnd)) {
               showRecurrence = false;
             }
 
             if (showRecurrence === true) {
-
-              // Build UTC string to correct for daylight savings
-              var str = startDate.format('YYYY-MM-DD') + dayjs(curEvent.start).format(' HH:mm');
-              startDate = dayjs(str);
-              endDate = dayjs(startDate).add(curDuration, 'second');
-              //format('YYYY-MM-DDThh:mm:ss[Z]')
-
-              event.start = startDate.unix();
-              event.end = endDate.unix();
-              event.gmtoffset = dayjs(startDate).utcOffset();
+              event.start = newStart.unix();
+              event.end = newEnd.unix();
+              event.gmtoffset = newStart.utcOffset();
+              event.tzid = zone || event.tzid;
 
               find = formatted.findIndex(function (e) {
                 return (e.uid == event.uid && e.start == event.start);
@@ -162,11 +173,9 @@ const icalToJSON = function (data) {
     }
   }
 
-  // sort by date
+  // sort by unix timestamp (numeric)
   formatted = formatted.sort(function (a, b) {
-    // Turn your strings into dates, and then subtract them
-    // to get a value that is either negative, positive, or zero.
-    return dayjs(a.start) - dayjs(b.start);
+    return (a.start || 0) - (b.start || 0);
   });
 
   return formatted;
