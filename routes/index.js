@@ -7,16 +7,18 @@ var router = express.Router();
 /* Date and Time functions */
 var dayjs = require('dayjs');
 var utc = require('dayjs/plugin/utc');
+var timezone = require('dayjs/plugin/timezone');
 dayjs.extend(utc);
-
-var gmtoffset = dayjs().utcOffset();
-
-var icalToJSON = require('../models/parse_ical.js');
+dayjs.extend(timezone);
 
 if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();
 }
 const CALENDAR_TOKEN = process.env.CALENDAR_TOKEN;
+var calendarTimezone = process.env.CALENDAR_TIMEZONE || 'UTC';
+var gmtoffset = dayjs.tz(dayjs(), calendarTimezone).utcOffset();
+
+var icalToJSON = require('../models/parse_ical.js');
 
 /* Calendar data */
 const ical = require('ical');

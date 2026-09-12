@@ -17,7 +17,9 @@ function parseDateWithZone(val, fallbackZone) {
   const zone = (val && val.tz) || fallbackZone || DEFAULT_FALLBACK_ZONE;
   try {
     if (zone) {
-      // If val is a Date or an ISO string, tz() will interpret it in the given zone
+      if (val instanceof Date) {
+        return dayjs.tz(dayjs(val).format('YYYY-MM-DD HH:mm:ss'), zone);
+      }
       return dayjs.tz(val, zone);
     } else {
       // Fallback to normal parsing (keeps offsets if present)
@@ -138,7 +140,7 @@ const icalToJSON = function (data) {
             }
 
             // Build a new start using the recurrence date and the original event's time in the same zone
-            var newStart = dayjs.tz(date, zone)
+            var newStart = parseDateWithZone(date, zone)
               .hour(timeOfDay.hour())
               .minute(timeOfDay.minute())
               .second(timeOfDay.second());
